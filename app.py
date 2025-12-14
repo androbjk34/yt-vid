@@ -6,7 +6,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "YouTube IPTV VOD Proxy OK"
+    return "YouTube IPTV VOD Proxy (Railway) OK"
 
 @app.route("/youtube.m3u8")
 def youtube_vod():
@@ -16,36 +16,47 @@ def youtube_vod():
 
     video_url = f"https://www.youtube.com/watch?v={video_id}"
 
+    # 🔥 Railway + SSL FIX
     ydl_opts = {
         "quiet": True,
         "skip_download": True,
         "forcejson": True,
-        "nocheckcertificate": True
+
+        # SSL / Railway sorun çözümleri
+        "nocheckcertificate": True,
+        "ignoreerrors": True,
+        "prefer_ipv4": True,
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=False)
     except Exception as e:
-        return f"Hata: {str(e)}", 500
+        return f"yt-dlp hata: {str(e)}", 500
 
-    hls = [
+    if not info or "formats" not in info:
+        return "Video bilgisi alınamadı", 500
+
+    # m3u8 (HLS) formatlarını filtrele
+    hls_formats = [
         f for f in info["formats"]
-        if f.get("protocol") == "m3u8_native"
+        if f.get("protocol") == "m3u8_native" and f.get("url")
     ]
 
-    if not hls:
-        return "m3u8 format bulunamadı", 404
+    if not hls_formats:
+        return "HLS (m3u8) format bulunamadı", 404
 
-    # En yüksek kalite
+    # En yüksek kaliteyi seç
     best = sorted(
-        hls,
+        hls_formats,
         key=lambda x: (x.get("height") or 0),
         reverse=True
     )[0]
 
+    title = info.get("title", "YouTube Video")
+
     playlist = f"""#EXTM3U
-#EXTINF:-1,{info.get('title')}
+#EXTINF:-1,{title}
 {best['url']}
 """
 
