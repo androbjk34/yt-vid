@@ -1,0 +1,5 @@
+# Railway'e hem Python hem de Node.js'yi yüklemesini söyler.
+build:
+  buildpacks:
+    - heroku/python
+    - heroku/nodejs
