@@ -1,33 +1,74 @@
+import os
+from flask import Flask, Response
 import yt_dlp
 
-video_url = "https://www.youtube.com/watch?v=VIDEO_ID"
+app = Flask(__name__)
 
-ydl_opts = {
-    "quiet": True,
-    "skip_download": True,
-    "forcejson": True,
-    "nocheckcertificate": True,
-    "prefer_ipv4": True,
-}
+# Örnek bir YouTube URL'si.
+# Bunu kendi videonuzla değiştirin!
+# Dikkat: Bu kod, yalnızca canlı yayınlar veya VOD'lar için M3U8 linkleri sağlayan videolarla çalışır.
+YOUTUBE_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ" 
+CHANNEL_NAME = "Rick Astley Resmi Kanalı"
+TITLE = "Never Gonna Give You Up"
 
-with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-    info = ydl.extract_info(video_url, download=False)
+def get_m3u8_url(youtube_url):
+    """
+    yt-dlp kullanarak YouTube videosunun doğrudan M3U8 akış URL'sini alır.
+    """
+    ydl_opts = {
+        'format': 'bestvideo+bestaudio/best',
+        'noplaylist': True,
+        'quiet': True,
+        'skip_download': True,
+        'forceurl': True,
+    }
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info_dict = ydl.extract_info(youtube_url, download=False)
+            # Eğer M3U8 akış URL'si mevcutsa onu kullanır.
+            # Bazı formatlar (örneğin DASH) doğrudan IPTV oynatıcılarda çalışmayabilir.
+            # 'hls' formatına öncelik vermeye çalışalım.
+            m3u8_url = next(
+                (f['url'] for f in info_dict.get('formats', []) if f.get('ext') == 'mp4' and f.get('protocol') == 'https'),
+                info_dict.get('url') # Yedek olarak ana URL'yi kullan
+            )
+            return m3u8_url
+    except Exception as e:
+        print(f"Hata oluştu: {e}")
+        return None
 
-# m3u8 (HLS) formatlarını al
-hls_formats = [
-    f for f in info.get("formats", [])
-    if f.get("protocol") == "m3u8_native"
-]
+@app.route('/playlist')
+def generate_m3u_playlist():
+    """
+    M3U formatında çalma listesi oluşturur.
+    """
+    stream_url = get_m3u8_url(YOUTUBE_URL)
+    
+    if not stream_url:
+        return Response("#EXTM3U\n# YAYIN ALINAMADI\n", mimetype='application/x-mpegurl')
 
-if not hls_formats:
-    print("❌ m3u8 bulunamadı")
-else:
-    # En yüksek kalite
-    best = sorted(
-        hls_formats,
-        key=lambda x: (x.get("height") or 0),
-        reverse=True
-    )[0]
+    m3u_content = (
+        "#EXTM3U\n"
+        f'#EXTINF:-1 tvg-id="{CHANNEL_NAME}" tvg-name="{CHANNEL_NAME}" group-title="YouTube",'
+        f'{TITLE}\n'
+        f'{stream_url}\n'
+    )
+    
+    # IPTV oynatıcılarının anlayacağı M3U dosyasını döndürür.
+    return Response(m3u_content, mimetype='application/x-mpegurl')
 
-    print("✅ Öncelikli (best) m3u8 linki:\n")
-    print(best["url"])
+@app.route('/')
+def home():
+    """
+    Basit karşılama sayfası.
+    """
+    return (
+        "<h1>YouTube'dan IPTV Akışı</h1>"
+        "<p>M3U çalma listenizi almak için: <a href='/playlist'>/playlist</a></p>"
+        "<p>Bu URL'yi IPTV oynatıcınıza ekleyin: (Railway domaininiz)/playlist</p>"
+    )
+
+if __name__ == '__main__':
+    # Railway'de PORT ortam değişkenini kullanır.
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
