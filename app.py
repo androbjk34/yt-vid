@@ -1,50 +1,33 @@
-from flask import Flask, request, Response
 import yt_dlp
 
-app = Flask(__name__)
+video_url = "https://www.youtube.com/watch?v=VIDEO_ID"
 
-@app.route("/youtube.m3u8")
-def youtube_vod():
-    video_id = request.args.get("id")
-    if not video_id:
-        return "Video ID gerekli ?id=VIDEO_ID", 400
+ydl_opts = {
+    "quiet": True,
+    "skip_download": True,
+    "forcejson": True,
+    "nocheckcertificate": True,
+    "prefer_ipv4": True,
+}
 
-    video_url = f"https://www.youtube.com/watch?v={video_id}"
+with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+    info = ydl.extract_info(video_url, download=False)
 
-    ydl_opts = {
-        "quiet": True,
-        "skip_download": True,
-        "forcejson": True,
-    }
+# m3u8 (HLS) formatlarını al
+hls_formats = [
+    f for f in info.get("formats", [])
+    if f.get("protocol") == "m3u8_native"
+]
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(video_url, download=False)
-
-    # m3u8 formatlarını bul
-    hls_formats = [
-        f for f in info["formats"]
-        if f.get("protocol") == "m3u8_native"
-    ]
-
-    if not hls_formats:
-        return "HLS (m3u8) format bulunamadı", 404
-
-    # En yüksek kaliteyi seç
+if not hls_formats:
+    print("❌ m3u8 bulunamadı")
+else:
+    # En yüksek kalite
     best = sorted(
         hls_formats,
         key=lambda x: (x.get("height") or 0),
         reverse=True
     )[0]
 
-    m3u8_url = best["url"]
-
-    playlist = f"""#EXTM3U
-#EXTINF:-1,{info.get('title')}
-{m3u8_url}
-"""
-
-    return Response(playlist, mimetype="application/x-mpegURL")
-
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=7860)
+    print("✅ Öncelikli (best) m3u8 linki:\n")
+    print(best["url"])
