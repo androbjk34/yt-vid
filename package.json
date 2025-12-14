@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "YouTube IPTV Proxy with Python and yt-dlp",
   "scripts": {
-    "start": "echo 'Node.js installed successfully'"
+    "start": "echo 'Node.js installed successfully for yt-dlp'"
   },
   "engines": {
     "node": "18.x" 
