@@ -8,69 +8,41 @@ app = Flask(__name__)
 
 # --- Yardımcı Fonksiyonlar ---
 
-def get_youtube_id(url_or_id):
+def get_stream_info(url):
     """
-    URL'den veya ID'den geçerli bir YouTube video kimliği (ID) çıkarır.
+    yt-dlp kullanarak verilen tam URL'den video akış URL'sini ve başlığını alır.
     """
-    processed_input = url_or_id.lstrip('/').replace('https:/', 'https://').replace('http:/', 'http://')
-    
-    if len(processed_input) == 11 and all(c.isalnum() or c in '-_' for c in processed_input):
-        return processed_input
-    
-    try:
-        parsed_url = urlparse(processed_input)
-        if parsed_url.hostname in ('www.youtube.com', 'youtube.com', 'm.youtube.com'):
-            if parsed_url.path == '/watch':
-                return parse_qs(parsed_url.query).get('v', [None])[0]
-        elif parsed_url.hostname in ('youtu.be',):
-            return parsed_url.path[1:]
-    except Exception:
-        pass
-        
-    return None
-
-def get_stream_info(youtube_id):
-    """
-    yt-dlp kullanarak M3U8/MPD manifestolarını ve akış URL'lerini alır.
-    """
-    url = f"https://www.youtube.com/watch?v={youtube_id}"
-    
     ydl_opts = {
-        # CRITICAL: m3u8 veya mpd (adaptif akış manifestosu) bulmaya odaklan.
-        'format': 'm3u8/mpd/best', 
+        # En iyi formatı almayı dener. OK.ru için genellikle doğrudan link döndürür.
+        'format': 'best', 
         'noplaylist': True,
         'quiet': True,
         'skip_download': True,
         'forceurl': True, 
         'retries': 5, 
-        # User-Agent, YouTube kısıtlamalarını aşmaya yardımcı olur.
+        'outtmpl': '%(title)s.%(ext)s', 
+        
+        # User-Agent kısıtlamalarını aşmaya yardımcı olur.
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         },
     }
     
     stream_url = None
-    title = f"YouTube Video ({youtube_id})"
+    title = "Harici Video Akışı"
 
     try:
-        # Node.js kurulu olduğu için JS tabanlı formatları artık çözebilir.
+        # YTDLP_EXEC ortam değişkeni (Railway'de ayarlanan) sayesinde JS runtime bulunacaktır.
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            # Doğrudan tam URL'yi veriyoruz
             info_dict = ydl.extract_info(url, download=False)
             
-            title = info_dict.get('title', title)
+            # Eğer başlık yoksa URL'yi başlık olarak kullan
+            title = info_dict.get('title', url)
             
-            if info_dict.get('formats'):
-                 for f in info_dict['formats']:
-                    url_text = f.get('url', '')
-                    if 'm3u8' in url_text:
-                        stream_url = url_text
-                        break
-                    elif 'mpd' in url_text:
-                         stream_url = url_text
+            # yt-dlp'nin bulduğu en iyi URL'yi kullan
+            stream_url = info_dict.get('url') 
             
-            if not stream_url:
-                stream_url = info_dict.get('url') 
-                
             if stream_url and stream_url.startswith('http'):
                 return stream_url, title
             
@@ -87,21 +59,29 @@ def get_stream_info(youtube_id):
 
 @app.route('/<path:video_id_or_url>')
 def generate_dynamic_m3u_playlist(video_id_or_url):
-    youtube_id = get_youtube_id(video_id_or_url)
-
-    if not youtube_id:
-        return Response(f"#EXTM3U\n#ERROR: Geçersiz YouTube URL veya ID formatı.\n", 
+    """
+    Gelen tam URL'yi alır ve doğrudan yt-dlp'ye göndererek M3U akışı oluşturur.
+    """
+    # Gelen URL parametresini çözme ve düzeltme:
+    # örn: /https:/ok.ru... -> https://ok.ru...
+    video_input = video_id_or_url.lstrip('/').replace('https:/', 'https://').replace('http:/', 'http://')
+    
+    if not video_input.startswith(('http://', 'https://')):
+        # Eğer gelen string bir URL değilse, kullanıcıya hata mesajı göster
+        return Response(f"#EXTM3U\n#ERROR: Lütfen tam ve geçerli bir URL (http:// veya https:// ile başlayan) girin.\n", 
                         mimetype='application/x-mpegurl', status=400)
-
-    stream_url, title = get_stream_info(youtube_id)
+    
+    # Tam URL'yi get_stream_info'ya gönderiyoruz
+    stream_url, title = get_stream_info(video_input)
     
     if not stream_url:
-        return Response(f"#EXTM3U\n#ERROR: '{title}' videosu için yayın linki ALINAMADI. Lütfen Railway loglarını kontrol edin.\n", 
+        return Response(f"#EXTM3U\n#ERROR: '{title}' videosu için yayın linki ALINAMADI. Lütfen URL'yi kontrol edin.\n", 
                         mimetype='application/x-mpegurl')
 
+    # M3U içerik oluşturma
     m3u_content = (
         "#EXTM3U\n"
-        f'#EXTINF:-1 tvg-name="{title}" group-title="YouTube Akışı",{title}\n'
+        f'#EXTINF:-1 tvg-name="{title}" group-title="Harici Akış",{title}\n'
         f'{stream_url}\n'
     )
     
@@ -109,13 +89,21 @@ def generate_dynamic_m3u_playlist(video_id_or_url):
 
 @app.route('/')
 def home():
+    """
+    Kullanım kılavuzu ve hoş geldiniz sayfası.
+    """
     domain = request.host_url.strip('/')
     return (
-        "<h1>YouTube'dan IPTV Akışı Proxy'si</h1>"
-        "<h3>Örnek Kullanım:</h3>"
-        f"<p><code>{domain}/dQw4w9WgXcQ</code></p>"
+        "<h1>Harici Video Akış Proxy'si (OK.ru, YouTube vb.)</h1>"
+        "<h2>Kullanım Şekli:</h2>"
+        "<p>IPTV oynatıcınızda çalma listesi URL'si olarak şunu kullanın:</p>"
+        "<code>[Domaininiz]/[Tam_Video_URL'si]</code>"
+        "<h3>Örnek:</h3>"
+        f"<li><b>OK.ru Kullanımı:</b> <code>{domain}/https://ok.ru/videoembed/7041299057281</code></li>"
+        f"<li><b>YouTube Kullanımı:</b> <code>{domain}/https://www.youtube.com/watch?v=dQw4w9WgXcQ</code></li>"
     )
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
+
