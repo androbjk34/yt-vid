@@ -1,25 +1,13 @@
 from flask import Flask, request, Response
 import yt_dlp
-import os
-import requests
-from urllib.parse import urljoin, quote
 
 app = Flask(__name__)
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0",
-    "Accept": "*/*",
-}
-
-@app.route("/")
-def home():
-    return "YouTube IPTV FULL PROXY OK"
 
 @app.route("/youtube.m3u8")
 def youtube_vod():
     video_id = request.args.get("id")
     if not video_id:
-        return "id gerekli", 400
+        return "Video ID gerekli ?id=VIDEO_ID", 400
 
     video_url = f"https://www.youtube.com/watch?v={video_id}"
 
@@ -27,48 +15,36 @@ def youtube_vod():
         "quiet": True,
         "skip_download": True,
         "forcejson": True,
-        "nocheckcertificate": True,
-        "prefer_ipv4": True,
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(video_url, download=False)
 
-    hls = [f for f in info["formats"] if f.get("protocol") == "m3u8_native"]
-    if not hls:
-        return "m3u8 yok", 404
+    # m3u8 formatlarını bul
+    hls_formats = [
+        f for f in info["formats"]
+        if f.get("protocol") == "m3u8_native"
+    ]
 
-    source_m3u8 = hls[-1]["url"]
+    if not hls_formats:
+        return "HLS (m3u8) format bulunamadı", 404
 
-    r = requests.get(source_m3u8, headers=HEADERS, timeout=10)
-    base = source_m3u8.rsplit("/", 1)[0] + "/"
+    # En yüksek kaliteyi seç
+    best = sorted(
+        hls_formats,
+        key=lambda x: (x.get("height") or 0),
+        reverse=True
+    )[0]
 
-    out = "#EXTM3U\n"
+    m3u8_url = best["url"]
 
-    for line in r.text.splitlines():
-        if line.startswith("#"):
-            out += line + "\n"
-        else:
-            absolute = urljoin(base, line)
-            out += f"/proxy?url={quote(absolute)}\n"
+    playlist = f"""#EXTM3U
+#EXTINF:-1,{info.get('title')}
+{m3u8_url}
+"""
 
-    return Response(out, mimetype="application/vnd.apple.mpegurl")
-
-
-@app.route("/proxy")
-def proxy():
-    url = request.args.get("url")
-    if not url:
-        return "url yok", 400
-
-    r = requests.get(url, headers=HEADERS, stream=True, timeout=10)
-    return Response(
-        r.iter_content(chunk_size=8192),
-        status=r.status_code,
-        headers={"Content-Type": r.headers.get("Content-Type", "application/octet-stream")}
-    )
+    return Response(playlist, mimetype="application/x-mpegURL")
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=7860)
