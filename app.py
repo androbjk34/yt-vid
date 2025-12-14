@@ -3,56 +3,47 @@ from flask import Flask, Response, request
 import yt_dlp
 from urllib.parse import urlparse, parse_qs
 
-# Gunicorn'un doğru bir şekilde bulması için Flask uygulamasının adı "app" olmalıdır.
+# CRITICAL: Gunicorn'un bulması için değişken adı "app" olmalı.
 app = Flask(__name__)
 
 # --- Yardımcı Fonksiyonlar ---
 
 def get_youtube_id(url_or_id):
     """
-    Verilen string'den (tam URL veya sadece ID) geçerli bir YouTube video kimliği (ID) çıkarır.
+    URL'den veya ID'den geçerli bir YouTube video kimliği (ID) çıkarır.
     """
-    # Gelen URL parametresini çözme (e.g. /https://www.youtube.com...)
     processed_input = url_or_id.lstrip('/').replace('https:/', 'https://').replace('http:/', 'http://')
     
-    # Eğer doğrudan 11 karakterlik ID verilmişse
     if len(processed_input) == 11 and all(c.isalnum() or c in '-_' for c in processed_input):
         return processed_input
     
-    # Tam URL'den ID çıkarma
     try:
         parsed_url = urlparse(processed_input)
-        
-        # Standart URL'den ID çıkarma (e.g., /watch?v=ID)
         if parsed_url.hostname in ('www.youtube.com', 'youtube.com', 'm.youtube.com'):
             if parsed_url.path == '/watch':
                 return parse_qs(parsed_url.query).get('v', [None])[0]
-        # Kısa URL'den ID çıkarma (e.g., youtu.be/ID)
         elif parsed_url.hostname in ('youtu.be',):
             return parsed_url.path[1:]
     except Exception:
         pass
         
-    return None # Geçersiz format
+    return None
 
 def get_stream_info(youtube_id):
     """
-    yt-dlp kullanarak video bilgilerini ve doğrudan M3U8 akış URL'sini alır.
-    Sadece HLS (m3u8) veya DASH (mpd) manifestolarını bulmaya odaklanır ve User-Agent ekler.
+    yt-dlp kullanarak M3U8/MPD manifestolarını ve akış URL'lerini alır.
     """
     url = f"https://www.youtube.com/watch?v={youtube_id}"
     
     ydl_opts = {
-        # CRITICAL: Yalnızca HLS (m3u8) veya DASH (mpd) formatlarını al.
+        # CRITICAL: m3u8 veya mpd (adaptif akış manifestosu) bulmaya odaklan.
         'format': 'm3u8/mpd/best', 
         'noplaylist': True,
         'quiet': True,
         'skip_download': True,
         'forceurl': True, 
         'retries': 5, 
-        'outtmpl': '%(title)s.%(ext)s', 
-        
-        # YouTube'un sunucu trafiğini kısıtlamasını engellemek için User-Agent eklenmiştir.
+        # User-Agent, YouTube kısıtlamalarını aşmaya yardımcı olur.
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         },
@@ -62,25 +53,21 @@ def get_stream_info(youtube_id):
     title = f"YouTube Video ({youtube_id})"
 
     try:
+        # Node.js kurulu olduğu için JS tabanlı formatları artık çözebilir.
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info_dict = ydl.extract_info(url, download=False)
             
             title = info_dict.get('title', title)
             
-            # 1. Aşama: Tüm formatları gez ve HLS/DASH manifestolarına öncelik ver
             if info_dict.get('formats'):
                  for f in info_dict['formats']:
                     url_text = f.get('url', '')
-                    
-                    # HLS (M3U8) akışını öncelikle ara
                     if 'm3u8' in url_text:
                         stream_url = url_text
                         break
-                    # DASH (MPD) akışını ara
                     elif 'mpd' in url_text:
                          stream_url = url_text
             
-            # 2. Aşama: Eğer manifest bulunamazsa, yt-dlp'nin varsayılan en iyi url'sini kullan
             if not stream_url:
                 stream_url = info_dict.get('url') 
                 
@@ -90,7 +77,6 @@ def get_stream_info(youtube_id):
             return None, title
             
     except yt_dlp.DownloadError as e:
-        # Hata loglandı. Eğer sorun devam ederse, Railway loglarında bu satırı arayın.
         print(f"yt-dlp Download Error: {e}") 
         return None, title
     except Exception as e:
@@ -101,22 +87,18 @@ def get_stream_info(youtube_id):
 
 @app.route('/<path:video_id_or_url>')
 def generate_dynamic_m3u_playlist(video_id_or_url):
-    """
-    Kullanıcının verdiği video ID'si/URL'si için M3U çalma listesi oluşturur.
-    """
     youtube_id = get_youtube_id(video_id_or_url)
 
     if not youtube_id:
-        return Response(f"#EXTM3U\n#ERROR: Geçersiz YouTube URL veya ID formatı. Kullanım: /dQw4w9WgXcQ veya /https://...\n", 
+        return Response(f"#EXTM3U\n#ERROR: Geçersiz YouTube URL veya ID formatı.\n", 
                         mimetype='application/x-mpegurl', status=400)
 
     stream_url, title = get_stream_info(youtube_id)
     
     if not stream_url:
-        return Response(f"#EXTM3U\n#ERROR: '{title}' videosu için yayın linki alınamadı. (ID: {youtube_id}). Akış manifestosu bulunamadı. Lütfen Railway loglarını kontrol edin.\n", 
+        return Response(f"#EXTM3U\n#ERROR: '{title}' videosu için yayın linki ALINAMADI. Lütfen Railway loglarını kontrol edin.\n", 
                         mimetype='application/x-mpegurl')
 
-    # M3U içerik oluşturma
     m3u_content = (
         "#EXTM3U\n"
         f'#EXTINF:-1 tvg-name="{title}" group-title="YouTube Akışı",{title}\n'
@@ -127,23 +109,13 @@ def generate_dynamic_m3u_playlist(video_id_or_url):
 
 @app.route('/')
 def home():
-    """
-    Kullanım kılavuzu ve hoş geldiniz sayfası.
-    """
     domain = request.host_url.strip('/')
     return (
         "<h1>YouTube'dan IPTV Akışı Proxy'si</h1>"
-        "<h2>Kullanım Şekli:</h2>"
-        "<p>IPTV oynatıcınızda çalma listesi URL'si olarak şunu kullanın:</p>"
-        "<code>[Domaininiz]/[YouTube_Video_ID_veya_Tam_URL]</code>"
-        "<h3>Örnekler:</h3>"
-        "<ul>"
-        f"<li><b>ID Kullanımı:</b> <code>{domain}/dQw4w9WgXcQ</code></li>"
-        f"<li><b>Tam URL Kullanımı:</b> <code>{domain}/https://www.youtube.com/watch?v=dQw4w9WgXcQ</code></li>"
-        "</ul>"
+        "<h3>Örnek Kullanım:</h3>"
+        f"<p><code>{domain}/dQw4w9WgXcQ</code></p>"
     )
 
 if __name__ == '__main__':
-    # Railway'de Gunicorn, PORT değişkenini kullanacağı için bu blok sadece yerel geliştirme içindir.
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
