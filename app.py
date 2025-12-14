@@ -13,7 +13,6 @@ def get_youtube_id(url_or_id):
     Verilen string'den (tam URL veya sadece ID) geçerli bir YouTube video kimliği (ID) çıkarır.
     """
     # Gelen URL parametresini çözme (e.g. /https://www.youtube.com...)
-    # Flask, '/' işaretini URL'nin parçası sanabilir. Bu satır, tam URL'leri düzeltir.
     processed_input = url_or_id.lstrip('/').replace('https:/', 'https://').replace('http:/', 'http://')
     
     # Eğer doğrudan 11 karakterlik ID verilmişse
@@ -39,13 +38,12 @@ def get_youtube_id(url_or_id):
 def get_stream_info(youtube_id):
     """
     yt-dlp kullanarak video bilgilerini ve doğrudan M3U8 akış URL'sini alır.
-    Bu versiyon, sadece HLS (m3u8) veya DASH (mpd) manifestolarını bulmaya odaklanır.
+    Sadece HLS (m3u8) veya DASH (mpd) manifestolarını bulmaya odaklanır ve User-Agent ekler.
     """
     url = f"https://www.youtube.com/watch?v={youtube_id}"
     
     ydl_opts = {
-        # CRITICAL: Yalnızca HLS (m3u8) veya DASH (mpd) formatlarını al. Bu, adaptif akış manifestolarıdır.
-        # Eğer manifestolar bulunamazsa, yt-dlp'nin 'best' seçeneğini dener.
+        # CRITICAL: Yalnızca HLS (m3u8) veya DASH (mpd) formatlarını al.
         'format': 'm3u8/mpd/best', 
         'noplaylist': True,
         'quiet': True,
@@ -53,6 +51,11 @@ def get_stream_info(youtube_id):
         'forceurl': True, 
         'retries': 5, 
         'outtmpl': '%(title)s.%(ext)s', 
+        
+        # YouTube'un sunucu trafiğini kısıtlamasını engellemek için User-Agent eklenmiştir.
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        },
     }
     
     stream_url = None
@@ -87,6 +90,7 @@ def get_stream_info(youtube_id):
             return None, title
             
     except yt_dlp.DownloadError as e:
+        # Hata loglandı. Eğer sorun devam ederse, Railway loglarında bu satırı arayın.
         print(f"yt-dlp Download Error: {e}") 
         return None, title
     except Exception as e:
@@ -109,7 +113,7 @@ def generate_dynamic_m3u_playlist(video_id_or_url):
     stream_url, title = get_stream_info(youtube_id)
     
     if not stream_url:
-        return Response(f"#EXTM3U\n#ERROR: '{title}' videosu için yayın linki alınamadı. (ID: {youtube_id}). Akış manifestosu bulunamadı.\n", 
+        return Response(f"#EXTM3U\n#ERROR: '{title}' videosu için yayın linki alınamadı. (ID: {youtube_id}). Akış manifestosu bulunamadı. Lütfen Railway loglarını kontrol edin.\n", 
                         mimetype='application/x-mpegurl')
 
     # M3U içerik oluşturma
